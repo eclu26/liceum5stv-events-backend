@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from postgrest.exceptions import APIError
 import bcrypt
 import jwt
@@ -13,6 +15,8 @@ router = APIRouter(
     prefix="/api/v1/users",
     tags=["Users"]
 )
+
+security = HTTPBearer()
 
 @router.post('/register', response_model=RegisterUserResponse)
 async def register(req_user: RegisterUserRequest) -> RegisterUserResponse:
@@ -52,14 +56,14 @@ async def auth(req_user: AuthUserRequest) -> AuthUserResponse:
     )
 
     if len(response.data) < 1:
-        return HTTPException(
+        raise HTTPException(
             status_code=404
         )
     else:
         user = response.data[0]
 
     if not bcrypt.checkpw(req_user.password.encode('utf-8'), user.get('password').encode('utf-8')):
-        return HTTPException(
+        raise HTTPException(
             status_code=401
         )
 
@@ -76,11 +80,13 @@ async def auth(req_user: AuthUserRequest) -> AuthUserResponse:
     )
 
 @router.post('/check-logged-user', response_model=CheckLoggedUserResponse)
-async def check_logged_user(req: CheckLoggedUserRequest) -> CheckLoggedUserResponse:
+async def check_logged_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)]) -> CheckLoggedUserResponse:
+    token = credentials.credentials
+
     try:
-        payload = jwt.decode(req.jwt, settings.jwt_key, algorithms=settings.jwt_algorithm)
-    except:
-        return HTTPException(
+        payload = jwt.decode(token, settings.jwt_key, algorithms=settings.jwt_algorithm)
+    except jwt.PyJWTError:
+        raise HTTPException(
             status_code=401
         )
 
@@ -92,7 +98,7 @@ async def check_logged_user(req: CheckLoggedUserRequest) -> CheckLoggedUserRespo
     )
 
     if len(response.data) < 1:
-        return HTTPException(
+        raise HTTPException(
             status_code=404
         )
 
