@@ -1,8 +1,13 @@
-from fastapi import APIRouter
-import bcrypt
+from datetime import datetime, timedelta, timezone
 
+from fastapi import APIRouter, HTTPException
+from postgrest.exceptions import APIError
+import bcrypt
+import jwt
+
+from app.settings import settings
 from app.database import client as database
-from app.schemas.users import RegisterUserRequest, RegisterUserResponse
+from app.schemas.users import *
 
 router = APIRouter(
     prefix="/api/v1/users",
@@ -10,24 +15,90 @@ router = APIRouter(
 )
 
 @router.post('/register', response_model=RegisterUserResponse)
-async def register(user: RegisterUserRequest) -> RegisterUserResponse:
-    new_user = {
-        "surname": user.surname,
-        "name": user.name,
-        "middle_name": user.middle_name,
-        "nickname": user.nickname,
-        "birthday": user.birthday, 
-        "phone": user.phone,
-        "password": bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
+async def register(req_user: RegisterUserRequest) -> RegisterUserResponse:
+    user = {
+        "surname": req_user.surname,
+        "name": req_user.name,
+        "middle_name": req_user.middle_name,
+        "nickname": req_user.nickname,
+        "birthday": req_user.birthday, 
+        "phone": req_user.phone,
+        "password": bcrypt.hashpw(req_user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     }
-    response = (
-        database.table("users")
-        .insert(new_user)
-        .execute()
-    )
+
+    try:
+        response = (
+            database.table("users")
+            .insert(user)
+            .execute()
+        )
+    except APIError:
+        raise HTTPException(
+            status_code=409
+        )
 
     return RegisterUserResponse(
         id=response.data[0].get('id'),
+        is_admin=response.data[0].get('is_admin')
+    )
+
+@router.post('/auth', response_model=AuthUserResponse)
+async def auth(req_user: AuthUserRequest) -> AuthUserResponse:
+    response = (
+        database.table("users")
+        .select("*")
+        .eq("phone", req_user.phone)
+        .execute()
+    )
+
+    if len(response.data) < 1:
+        return HTTPException(
+            status_code=404
+        )
+    else:
+        user = response.data[0]
+
+    if not bcrypt.checkpw(req_user.password.encode('utf-8'), user.get('password').encode('utf-8')):
+        return HTTPException(
+            status_code=401
+        )
+
+    payload = {
+        "sub": user.get('id'),
+        "is_admin": user.get('is_admin'),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_time)
+    }
+
+    token = jwt.encode(payload, settings.jwt_key, algorithm=settings.jwt_algorithm)
+
+    return AuthUserResponse(
+        jwt=token
+    )
+
+@router.post('/check-logged-user', response_model=CheckLoggedUserResponse)
+async def check_logged_user(req: CheckLoggedUserRequest) -> CheckLoggedUserResponse:
+    try:
+        payload = jwt.decode(req.jwt, settings.jwt_key, algorithms=settings.jwt_algorithm)
+    except:
+        return HTTPException(
+            status_code=401
+        )
+
+    response = (
+        database.table("users")
+        .select("*")
+        .eq("id", payload.get('sub'))
+        .execute()
+    )
+
+    if len(response.data) < 1:
+        return HTTPException(
+            status_code=404
+        )
+
+    return CheckLoggedUserResponse(
+        id=response.data[0].get('id'),
+        is_admin=response.data[0].get('is_admin'),
         surname=response.data[0].get('surname'),
         name=response.data[0].get('name'),
         middle_name=response.data[0].get('middle_name'),
@@ -35,7 +106,3 @@ async def register(user: RegisterUserRequest) -> RegisterUserResponse:
         birthday=response.data[0].get('birthday'),
         phone=response.data[0].get('phone')
     )
-
-@router.post('/auth')
-async def auth():
-    return "PLACEHOLDER"

@@ -6,4 +6,8 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
 
+    jwt_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_time: int = 60
+
 settings = Settings()
